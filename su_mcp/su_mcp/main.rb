@@ -7,6 +7,18 @@ puts "MCP Extension loading..."
 SKETCHUP_CONSOLE.show rescue nil
 
 module SU_MCP
+  VERBOSE = false
+
+  @extra_tools = {}
+
+  def self.register(name, &block)
+    @extra_tools[name] = block
+  end
+
+  def self.extra_tools
+    @extra_tools
+  end
+
   class Server
     def initialize
       @port = 9876
@@ -26,7 +38,16 @@ module SU_MCP
       end
     end
 
+    # Verbose per-request tracing — OFF unless SU_MCP::VERBOSE. Before this
+    # guard every request dumped its full payload AND response into the
+    # SketchUp console unconditionally (console spam + real work for large
+    # results). Lifecycle + error messages use err() and always show.
     def log(msg)
+      return unless VERBOSE
+      err(msg)
+    end
+
+    def err(msg)
       begin
         SKETCHUP_CONSOLE.write("MCP: #{msg}\n")
       rescue
@@ -39,10 +60,10 @@ module SU_MCP
       return if @running
       
       begin
-        log "Starting server on localhost:#{@port}..."
-        
+        err "Starting server on localhost:#{@port}..."
+
         @server = TCPServer.new('127.0.0.1', @port)
-        log "Server created on port #{@port}"
+        err "Server created on port #{@port}"
         
         @running = true
         
@@ -89,7 +110,7 @@ module SU_MCP
                     client.flush
                     log "Response sent"
                   rescue JSON::ParserError => e
-                    log "JSON parse error: #{e.message}"
+                    err "JSON parse error: #{e.message}"
                     error_response = {
                       jsonrpc: "2.0",
                       error: { code: -32700, message: "Parse error" },
@@ -98,7 +119,7 @@ module SU_MCP
                     client.write(error_response)
                     client.flush
                   rescue StandardError => e
-                    log "Request error: #{e.message}"
+                    err "Request error: #{e.message}"
                     error_response = {
                       jsonrpc: "2.0",
                       error: { code: -32603, message: e.message },
@@ -116,22 +137,22 @@ module SU_MCP
           rescue IO::WaitReadable
             # Normal for accept_nonblock
           rescue StandardError => e
-            log "Timer error: #{e.message}"
-            log e.backtrace.join("\n")
+            err "Timer error: #{e.message}"
+            err e.backtrace.join("\n")
           end
         }
         
-        log "Server started and listening"
-        
+        err "Server started and listening"
+
       rescue StandardError => e
-        log "Error: #{e.message}"
-        log e.backtrace.join("\n")
+        err "Error: #{e.message}"
+        err e.backtrace.join("\n")
         stop
       end
     end
 
     def stop
-      log "Stopping server..."
+      err "Stopping server..."
       @running = false
       
       if @timer_id
@@ -141,7 +162,7 @@ module SU_MCP
       
       @server.close if @server
       @server = nil
-      log "Server stopped"
+      err "Server stopped"
     end
 
     private
@@ -245,7 +266,9 @@ module SU_MCP
         when "eval_ruby"
           eval_ruby(args)
         else
-          raise "Unknown tool: #{tool_name}"
+          handler = SU_MCP.extra_tools[tool_name]
+          raise "Unknown tool: #{tool_name}" unless handler
+          handler.call(args)
         end
 
         log "Tool call result: #{result.inspect}"
@@ -276,7 +299,7 @@ module SU_MCP
           response
         end
       rescue StandardError => e
-        log "Tool call error: #{e.message}"
+        err "Tool call error: #{e.message}"
         response = {
           jsonrpc: request["jsonrpc"] || "2.0",
           error: { 
@@ -1840,9 +1863,9 @@ module SU_MCP
           success: true,
           result: result.to_s
         }
-      rescue StandardError => e
-        log "Error in eval_ruby: #{e.message}"
-        log e.backtrace.join("\n")
+      rescue Exception => e
+        err "Error in eval_ruby: #{e.message}"
+        err e.backtrace.join("\n")
         raise "Ruby evaluation error: #{e.message}"
       end
     end
