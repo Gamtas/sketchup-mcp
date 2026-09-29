@@ -1877,6 +1877,10 @@ module SU_MCP
     menu = UI.menu("Plugins").add_submenu("MCP Server")
     menu.add_item("Start Server") { @server.start }
     menu.add_item("Stop Server") { @server.stop }
+
+    # Auto-start: an agent (skp-repl) cannot click the menu. start is
+    # idempotent, so a dev loader that also starts it is harmless.
+    UI.start_timer(1.0, false) { @server.start }
     
     file_loaded(__FILE__)
   end
